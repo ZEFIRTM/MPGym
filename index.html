@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>DDX Fitness</title>
+
+  <!--
+  ╔══════════════════════════════════════════════════════════════╗
+  ║  ШАГ 1: Вставь сюда свой firebaseConfig                     ║
+  ║  Firebase Console → Project Settings → General →            ║
+  ║  Your apps → SDK setup → firebaseConfig                     ║
+  ╚══════════════════════════════════════════════════════════════╝
+  -->
+  <script>
+    window.__FB_CONFIG = {
+      apiKey:            "AIzaSyBYunZkFH1YCYFpMk41P5qGBzYG6aT-wE4",
+      authDomain:        "mpgym-c74c8.firebaseapp.com",
+      projectId:         "mpgym-c74c8",
+      storageBucket:     "mpgym-c74c8.firebasestorage.app",
+      messagingSenderId: "78230418371",
+      appId:             "1:78230418371:web:70aedfaad6c6a3f3eec376"
+    };
+  </script>
+
+  <!--
+  ╔══════════════════════════════════════════════════════════════╗
+  ║  СТРУКТУРА FIRESTORE (коллекции и поля)                      ║
+  ╠══════════════════════════════════════════════════════════════╣
+  ║                                                              ║
+  ║  programs/{programId}                                        ║
+  ║    name: string                                              ║
+  ║    description: string                                       ║
+  ║    created_at: timestamp                                     ║
+  ║                                                              ║
+  ║  programs/{programId}/workout_days/{dayId}                   ║
+  ║    name: string          -- "День A — Грудь/Трицепс"        ║
+  ║    day_of_week: number   -- 1=Пн, 7=Вс                      ║
+  ║    order_index: number                                       ║
+  ║    exercises: array of {                                     ║
+  ║      id: string (auto),                                      ║
+  ║      name, machine, sets, reps, weight, rest_seconds,        ║
+  ║      notes, order_index                                      ║
+  ║    }                                                         ║
+  ║                                                              ║
+  ║  users/{telegramId}                                          ║
+  ║    telegram_id: number                                       ║
+  ║    telegram_name: string                                     ║
+  ║    telegram_username: string                                 ║
+  ║    display_name: string                                      ║
+  ║    goal: string                                              ║
+  ║    program_id: string (ref to programs)                      ║
+  ║    created_at: timestamp                                     ║
+  ║    last_seen: timestamp                                      ║
+  ║                                                              ║
+  ║  invite_codes/{code}                                         ║
+  ║    code: string                                              ║
+  ║    is_active: boolean                                        ║
+  ║    used_by: number (telegram_id)                             ║
+  ║    used_at: timestamp                                        ║
+  ║    created_at: timestamp                                     ║
+  ║                                                              ║
+  ║  workout_sessions/{sessionId}                                ║
+  ║    user_id: string (telegram_id as string)                   ║
+  ║    workout_day_id: string                                    ║
+  ║    program_id: string                                        ║
+  ║    date: string (YYYY-MM-DD)                                 ║
+  ║    status: "in_progress" | "completed" | "skipped"          ║
+  ║    started_at: timestamp                                     ║
+  ║    finished_at: timestamp                                    ║
+  ║    set_logs: array of {                                      ║
+  ║      exercise_id: string,                                    ║
+  ║      set_number: number,                                     ║
+  ║      logged_at: timestamp                                    ║
+  ║    }                                                         ║
+  ║                                                              ║
+  ║  ДОБАВИТЬ ПРОГРАММУ И КОД ВРУЧНУЮ В FIRESTORE CONSOLE:      ║
+  ║  1) programs → Add document → задай name и workout_days     ║
+  ║  2) invite_codes → Add document → id=код (напр. DDXF-2024)  ║
+  ║     поля: code="DDXF-2024", is_active=true                   ║
+  ╚══════════════════════════════════════════════════════════════╝
+  -->
+
+  <!-- Firebase SDK (compat — работает без сборщика) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+  <!-- React -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+
+  <!-- Telegram Mini App -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <style>
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    :root {
+      --bg:#080808; --surf:#131313; --surf2:#1C1C1C; --surf3:#252525;
+      --lime:#C6FF3E; --lime-dim:rgba(198,255,62,.13); --lime-glow:rgba(198,255,62,.06);
+      --red:#FF3F3F; --red-dim:rgba(255,63,63,.12);
+      --text:#FFFFFF; --text2:#888; --text3:#444;
+      --border:rgba(255,255,255,.055);
+      --r:14px;
+      --safe-bot:env(safe-area-inset-bottom,0px);
+    }
+    html,body { height:100%; overflow:hidden; }
+    body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',Roboto,sans-serif; font-size:16px; line-height:1.5; overscroll-behavior:none; }
+    #root { height:100%; display:flex; flex-direction:column; }
+
+    #splash { position:fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; z-index:9999; flex-direction:column; gap:20px; }
+    #splash .logo { width:64px; height:64px; border-radius:18px; background:linear-gradient(135deg,#C6FF3E,#7AFF00); display:flex; align-items:center; justify-content:center; font-size:32px; box-shadow:0 0 40px rgba(198,255,62,.3); }
+
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .spin { width:28px; height:28px; border-radius:50%; border:2px solid var(--surf3); border-top-color:var(--lime); animation:spin .75s linear infinite; }
+
+    .scroll { flex:1; overflow-y:auto; overflow-x:hidden; padding-bottom:calc(72px + var(--safe-bot) + 8px); -webkit-overflow-scrolling:touch; }
+    .scroll::-webkit-scrollbar { display:none; }
+
+    .btn { display:flex; align-items:center; justify-content:center; gap:7px; border:none; cursor:pointer; font-family:inherit; font-weight:700; transition:opacity .12s,transform .1s; -webkit-user-select:none; user-select:none; border-radius:var(--r); }
+    .btn:active { transform:scale(.96); }
+    .btn:disabled { opacity:.45; pointer-events:none; }
+    .btn-lime { background:var(--lime); color:#060606; padding:15px 24px; font-size:15px; width:100%; }
+    .btn-danger { background:var(--red-dim); color:var(--red); padding:14px 24px; font-size:15px; width:100%; }
+    .btn-icon { background:var(--surf2); color:var(--text2); padding:9px; width:38px; height:38px; border-radius:10px; flex-shrink:0; }
+
+    .card { background:var(--surf); border-radius:var(--r); border:1px solid var(--border); padding:16px; }
+    .input { background:var(--surf2); border:1px solid var(--border); border-radius:var(--r); color:var(--text); font-family:inherit; font-size:16px; padding:14px 16px; width:100%; outline:none; transition:border-color .15s; caret-color:var(--lime); }
+    .input:focus { border-color:var(--lime); }
+    .input::placeholder { color:var(--text3); }
+
+    .tag { display:inline-flex; align-items:center; padding:3px 9px; border-radius:6px; font-size:12px; font-weight:700; }
+    .tag-lime { background:var(--lime-dim); color:var(--lime); }
+    .tag-red  { background:var(--red-dim);  color:var(--red); }
+    .tag-gray { background:var(--surf2);    color:var(--text2); }
+
+    .nav { position:fixed; bottom:0; left:0; right:0; background:rgba(13,13,13,.92); border-top:1px solid var(--border); display:flex; padding-bottom:var(--safe-bot); z-index:100; backdrop-filter:blur(24px); -webkit-backdrop-filter:blur(24px); }
+    .nav-btn { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; padding:10px 4px; cursor:pointer; font-family:inherit; color:var(--text3); font-size:10.5px; font-weight:600; border:none; background:none; transition:color .15s; }
+    .nav-btn.active { color:var(--lime); }
+
+    .pbar { height:3px; background:var(--surf3); border-radius:2px; overflow:hidden; }
+    .pfill { height:100%; background:var(--lime); border-radius:2px; transition:width .35s ease; }
+
+    .set-dot { width:38px; height:38px; border-radius:50%; border:1.5px solid var(--surf3); display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:13px; font-weight:700; color:var(--text3); background:var(--surf2); transition:all .14s; -webkit-user-select:none; user-select:none; }
+    .set-dot.done { background:var(--lime); border-color:var(--lime); color:#000; }
+    .set-dot:active { transform:scale(.88); }
+
+    .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
+    .cal-cell { aspect-ratio:1; display:flex; flex-direction:column; align-items:center; justify-content:center; border-radius:9px; font-size:13px; cursor:pointer; position:relative; transition:background .12s; border:1.5px solid transparent; }
+    .cal-cell:active { opacity:.7; }
+    .cal-cell.is-today { border-color:var(--lime); color:var(--lime); font-weight:700; }
+    .cal-cell.is-done  { background:rgba(198,255,62,.12); }
+    .cal-cell.is-skip  { background:rgba(255,63,63,.09); }
+    .cal-cell.is-sel   { background:var(--lime); color:#000; font-weight:700; border-color:transparent; }
+
+    .overlay { position:fixed; inset:0; background:rgba(0,0,0,.75); display:flex; align-items:flex-end; z-index:200; backdrop-filter:blur(6px); }
+    .sheet { background:var(--surf); width:100%; border-radius:20px 20px 0 0; border-top:1px solid var(--border); padding:20px 20px calc(20px + var(--safe-bot)); }
+    .sheet-handle { width:36px; height:4px; background:var(--surf3); border-radius:2px; margin:0 auto 20px; }
+    .divider { height:1px; background:var(--border); margin:10px 0; }
+
+    @keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+    .fade { animation:fadeUp .22s ease forwards; }
+
+    .ex-card { background:var(--surf); border-radius:var(--r); border:1.5px solid var(--border); padding:15px; margin-bottom:10px; transition:border-color .2s,background .2s; }
+    .ex-card.ex-done { border-color:rgba(198,255,62,.28); background:rgba(198,255,62,.04); }
+
+    .stat-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .stat-card { background:var(--surf); border-radius:var(--r); border:1px solid var(--border); padding:14px; }
+  </style>
+</head>
+<body>
+
+<div id="splash">
+  <div class="logo">💪</div>
+  <div class="spin"></div>
+</div>
+
+<div id="root"></div>
+
+<script>
+(function() {
+'use strict';
+
+const e = React.createElement;
+const { useState, useEffect, useRef, Fragment } = React;
+
+// ── Firebase init ──
+firebase.initializeApp(window.__FB_CONFIG);
+const fs = firebase.firestore();
+
+// ── Telegram ──
+const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+if (tg) {
+  tg.ready(); tg.expand();
+  if (tg.enableClosingConfirmation) tg.enableClosingConfirmation();
+  if (tg.setHeaderColor)     tg.setHeaderColor('#080808');
+  if (tg.setBackgroundColor) tg.setBackgroundColor('#080808');
+}
+const TG_USER = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null;
+// DEV: раскомментируй для теста без Telegram:
+// const TG_USER = { id: 123456789, first_name: 'Дима', last_name: 'К', username: 'ddxuser' };
+
+// ── Утилиты ──
+const toStr = (d) => {
+  const dt = d || new Date();
+  return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0');
+};
+const getDow  = (d) => { const x = (d||new Date()).getDay(); return x === 0 ? 7 : x; };
+const fmtDate = (d) => new Date(d + 'T12:00:00').toLocaleDateString('ru-RU', { day:'numeric', month:'long' });
+const fmtTime = (d) => new Date(d).toLocaleTimeString('ru-RU', { hour:'2-digit', minute:'2-digit' });
+const fmtSecs = (s) => Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+const uid = () => Math.random().toString(36).slice(2,10);
+
+const DOW  = ['','Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+const MONS = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+
+const calcStreak = (dates) => {
+  if (!dates.length) return 0;
+  const s = [...dates].sort().reverse();
+  const t = toStr(), y = toStr(new Date(Date.now()-86400000));
+  if (s[0] !== t && s[0] !== y) return 0;
+  let streak = 1;
+  for (let i = 1; i < s.length; i++) {
+    if ((new Date(s[i-1]) - new Date(s[i])) / 86400000 === 1) streak++;
+    else break;
+  }
+  return streak;
+};
+
+// ── API (Firebase Firestore) ──
+// users/{tgId} — документ пользователя
+// users/{tgId}/programs/{programId}/workout_days — подколлекция дней
+// invite_codes/{code} — коды приглашений
+// workout_sessions/{sessionId} — сессии тренировок (set_logs хранятся внутри как массив)
+
+const API = {
+  // Получить пользователя с его программой и днями
+  async getUser(tgId) {
+    try {
+      const snap = await fs.collection('users').doc(String(tgId)).get();
+      if (!snap.exists) return null;
+      const user = { id: snap.id, ...snap.data() };
+      if (user.program_id) {
+        const progSnap = await fs.collection('programs').doc(user.program_id).get();
+        if (progSnap.exists) {
+          const program = { id: progSnap.id, ...progSnap.data() };
+          const daysSnap = await fs.collection('programs').doc(user.program_id).collection('workout_days').orderBy('order_index').get();
+          program.workout_days = await Promise.all(daysSnap.docs.map(async d => {
+            const day = { id: d.id, ...d.data() };
+            // exercises хранятся как массив внутри документа дня
+            if (!day.exercises) day.exercises = [];
+            return day;
+          }));
+          user.programs = program;
+        }
+      }
+      return user;
+    } catch(err) { console.error('getUser', err); return null; }
+  },
+
+  async createUser(tgUser, code) {
+    try {
+      const docRef = fs.collection('users').doc(String(tgUser.id));
+      const data = {
+        telegram_id: tgUser.id,
+        telegram_name: [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' '),
+        telegram_username: tgUser.username || null,
+        display_name: tgUser.first_name || 'Атлет',
+        goal: '',
+        program_id: null,
+        created_at: firebase.firestore.FieldValue.serverTimestamp(),
+        last_seen: firebase.firestore.FieldValue.serverTimestamp(),
+      };
+      await docRef.set(data);
+      if (code) {
+        await fs.collection('invite_codes').doc(code.toUpperCase()).update({
+          is_active: false,
+          used_by: tgUser.id,
+          used_at: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+      const created = await docRef.get();
+      return { id: created.id, ...created.data() };
+    } catch(err) { console.error('createUser', err); return null; }
+  },
+
+  async validateCode(code) {
+    try {
+      const snap = await fs.collection('invite_codes').doc(code.toUpperCase()).get();
+      if (!snap.exists) return null;
+      const d = snap.data();
+      if (!d.is_active) return null;
+      return { id: snap.id, ...d };
+    } catch(err) { console.error('validateCode', err); return null; }
+  },
+
+  async touch(userId) {
+    try {
+      await fs.collection('users').doc(String(userId)).update({ last_seen: firebase.firestore.FieldValue.serverTimestamp() });
+    } catch(err) {}
+  },
+
+  async updateUser(userId, updates) {
+    try {
+      await fs.collection('users').doc(String(userId)).update(updates);
+      const snap = await fs.collection('users').doc(String(userId)).get();
+      return { id: snap.id, ...snap.data() };
+    } catch(err) { console.error('updateUser', err); return null; }
+  },
+
+  // Получить сессию за конкретный день
+  async getTodaySession(userId, date) {
+    try {
+      const snap = await fs.collection('workout_sessions')
+        .where('user_id', '==', String(userId))
+        .where('date', '==', date)
+        .limit(1).get();
+      if (snap.empty) return null;
+      const d = snap.docs[0];
+      return { id: d.id, ...d.data() };
+    } catch(err) { console.error('getTodaySession', err); return null; }
+  },
+
+  // Создать сессию. Данные о дне передаём отдельно (уже загружены)
+  async createSession(userId, workoutDayId, programId, date) {
+    try {
+      const ref = await fs.collection('workout_sessions').add({
+        user_id: String(userId),
+        workout_day_id: workoutDayId,
+        program_id: programId,
+        date,
+        status: 'in_progress',
+        started_at: firebase.firestore.FieldValue.serverTimestamp(),
+        finished_at: null,
+        set_logs: [],
+      });
+      const snap = await ref.get();
+      return { id: snap.id, ...snap.data() };
+    } catch(err) { console.error('createSession', err); return null; }
+  },
+
+  async updateSession(sessionId, updates) {
+    try {
+      await fs.collection('workout_sessions').doc(sessionId).update(updates);
+      const snap = await fs.collection('workout_sessions').doc(sessionId).get();
+      return { id: snap.id, ...snap.data() };
+    } catch(err) { console.error('updateSession', err); return null; }
+  },
+
+  // set_logs хранятся как массив в документе сессии
+  async getSessionSets(sessionId) {
+    try {
+      const snap = await fs.collection('workout_sessions').doc(sessionId).get();
+      return snap.exists ? (snap.data().set_logs || []) : [];
+    } catch(err) { return []; }
+  },
+
+  async logSet(sessionId, exerciseId, setNum) {
+    try {
+      await fs.collection('workout_sessions').doc(sessionId).update({
+        set_logs: firebase.firestore.FieldValue.arrayUnion({ exercise_id: exerciseId, set_number: setNum })
+      });
+    } catch(err) { console.error('logSet', err); }
+  },
+
+  async removeSet(sessionId, exerciseId, setNum) {
+    try {
+      await fs.collection('workout_sessions').doc(sessionId).update({
+        set_logs: firebase.firestore.FieldValue.arrayRemove({ exercise_id: exerciseId, set_number: setNum })
+      });
+    } catch(err) { console.error('removeSet', err); }
+  },
+
+  // Получить сессии за месяц
+  async getMonthSessions(userId, startDate, endDate) {
+    try {
+      const snap = await fs.collection('workout_sessions')
+        .where('user_id', '==', String(userId))
+        .where('date', '>=', startDate)
+        .where('date', '<=', endDate)
+        .orderBy('date', 'desc').get();
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch(err) { console.error('getMonthSessions', err); return []; }
+  },
+
+  async getStats(userId) {
+    try {
+      const snap = await fs.collection('workout_sessions').where('user_id', '==', String(userId)).get();
+      const sessions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const completedDates = sessions.filter(s => s.status === 'completed').map(s => s.date);
+      const totalSets = sessions.reduce((acc, s) => acc + (s.set_logs ? s.set_logs.length : 0), 0);
+      return { totalWorkouts: completedDates.length, streak: calcStreak(completedDates), totalSets };
+    } catch(err) { return { totalWorkouts: 0, streak: 0, totalSets: 0 }; }
+  },
+};
+
+// ── SVG иконки ──
+function Ic({ n, s, c }) {
+  const sz = s || 22; const col = c || 'currentColor';
+  if (n === 'calendar') return e('svg',{width:sz,height:sz,viewBox:'0 0 24 24',fill:'none'},
+    e('rect',{x:3,y:4,width:18,height:18,rx:2.5,stroke:col,strokeWidth:1.7}),
+    e('path',{d:'M16 2v4M8 2v4M3 10h18',stroke:col,strokeWidth:1.7,strokeLinecap:'round'}));
+  if (n === 'person') return e('svg',{width:sz,height:sz,viewBox:'0 0 24 24',fill:'none'},
+    e('circle',{cx:12,cy:8,r:4,stroke:col,strokeWidth:1.7}),
+    e('path',{d:'M4 20c0-4 3.6-7 8-7s8 3 8 7',stroke:col,strokeWidth:1.7,strokeLinecap:'round'}));
+  if (n === 'target') return e('svg',{width:sz,height:sz,viewBox:'0 0 24 24',fill:'none'},
+    e('circle',{cx:12,cy:12,r:10,stroke:col,strokeWidth:1.7}),
+    e('circle',{cx:12,cy:12,r:6,stroke:col,strokeWidth:1.7}),
+    e('circle',{cx:12,cy:12,r:2,stroke:col,strokeWidth:1.7}));
+  if (n === 'fire') return e('svg',{width:sz,height:sz,viewBox:'0 0 24 24',fill:'none'},
+    e('path',{d:'M12 2c0 6-6 7-6 12a6 6 0 0012 0c0-5-6-6-6-12z',stroke:col,strokeWidth:1.7,strokeLinejoin:'round'}),
+    e('path',{d:'M12 22a3 3 0 01-3-3c0-2 3-4 3-4s3 2 3 4a3 3 0 01-3 3z',stroke:col,strokeWidth:1.7,fill:col,fillOpacity:.2}));
+  if (n === 'dumbbell') return e('svg',{width:sz,height:sz,viewBox:'0 0 24 24',fill:'none'},
+    e('path',{d:'M6.5 6.5h11M6.5 17.5h11',stroke:col,strokeWidth:3,strokeLinecap:'round'}),
+    e('path',{d:'M4 9v6M20 9v6',stroke:col,strokeWidth:2.5,strokeLinecap:'round'}),
+    e('path',{d:'M2 10.5v3M22 10.5v3',stroke:col,strokeWidth:2,strokeLinecap:'round'}));
+  if (n === 'home') return e('svg',{width:sz,height:sz,viewBox:'0 0 24 24',fill:'none'},
+    e('path',{d:'M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2V9zM9 22V12h6v10',stroke:col,strokeWidth:1.7,strokeLinecap:'round',strokeLinejoin:'round'}));
+  if (n === 'check') return e('svg',{width:sz,height:sz,viewBox:'0 0 24 24',fill:'none'},
+    e('path',{d:'M20 6L9 17l-5-5',stroke:col,strokeWidth:1.7,strokeLinecap:'round',strokeLinejoin:'round'}));
+  if (n === 'back') return e('svg',{width:sz,height:sz,viewBox:'0 0 24 24',fill:'none'},
+    e('path',{d:'M19 12H5M5 12l7 7M5 12l7-7',stroke:col,strokeWidth:1.7,strokeLinecap:'round',strokeLinejoin:'round'}));
+  if (n === 'edit') return e('svg',{width:sz,height:sz,viewBox:'0 0 24 24',fill:'none'},
+    e('path',{d:'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4z',stroke:col,strokeWidth:1.7,strokeLinecap:'round',strokeLinejoin:'round'}));
+  if (n === 'chevL') return e('svg',{width:sz,height:sz,viewBox:'0 0 24 24',fill:'none'},
+    e('path',{d:'M15 18l-6-6 6-6',stroke:col,strokeWidth:1.7,strokeLinecap:'round',strokeLinejoin:'round'}));
+  if (n === 'chevR') return e('svg',{width:sz,height:sz,viewBox:'0 0 24 24',fill:'none'},
+    e('path',{d:'M9 18l6-6-6-6',stroke:col,strokeWidth:1.7,strokeLinecap:'round',strokeLinejoin:'round'}));
+  return null;
+}
+
+// ── AuthScreen ──
+function AuthScreen({ onAuth }) {
+  const [code, setCode] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async () => {
+    if (!code.trim() || loading) return;
+    setLoading(true); setError('');
+    try {
+      if (!TG_USER) { setError('Открой приложение через Telegram'); setLoading(false); return; }
+      const valid = await API.validateCode(code.trim());
+      if (!valid) { setError('Неверный или уже использованный код'); setLoading(false); return; }
+      const user = await API.createUser(TG_USER, code.trim());
+      if (user) onAuth(user); else setError('Ошибка создания аккаунта');
+    } catch(err) { console.error(err); setError('Что-то пошло не так. Попробуй ещё раз.'); }
+    setLoading(false);
+  };
+
+  return e('div',{style:{minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'24px'}},
+    e('div',{style:{width:'100%',maxWidth:320},className:'fade'},
+      e('div',{style:{textAlign:'center',marginBottom:44}},
+        e('div',{style:{width:72,height:72,borderRadius:20,background:'linear-gradient(135deg,#C6FF3E,#7AFF00)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 18px',fontSize:34,boxShadow:'0 0 40px rgba(198,255,62,.25)'}},'💪'),
+        e('h1',{style:{fontSize:28,fontWeight:800,letterSpacing:-.5}},'DDX Fitness'),
+        e('p',{style:{color:'var(--text2)',marginTop:6,fontSize:15}},'Трекер тренировок')
+      ),
+      e('p',{style:{color:'var(--text2)',fontSize:13,textAlign:'center',marginBottom:12}},'Введи код приглашения'),
+      e('input',{
+        className:'input',
+        placeholder:'XXXX-XXXX',
+        value:code,
+        onChange:ev => setCode(ev.target.value.toUpperCase()),
+        onKeyDown:ev => ev.key==='Enter' && submit(),
+        style:{marginBottom:error?8:12},
+        autoFocus:true
+      }),
+      error && e('p',{style:{color:'var(--red)',fontSize:13,marginBottom:12,textAlign:'center'}},error),
+      e('button',{className:'btn btn-lime',onClick:submit,disabled:loading},
+        loading ? e('div',{className:'spin',style:{width:20,height:20,borderWidth:2,borderTopColor:'#000'}}) : 'Войти'
+      )
+    )
+  );
+}
+
+// ── HomeScreen ──
+function HomeScreen({ user, onStart }) {
+  const [loading, setLoading] = useState(true);
+  const [todaySess, setTodaySess] = useState(null);
+  const [todayDay, setTodayDay]   = useState(null);
+  const today = toStr();
+  const dow    = getDow();
+
+  useEffect(() => { load(); }, []);
+
+  const load = async () => {
+    setLoading(true);
+    const sess = await API.getTodaySession(user.id || user.telegram_id, today);
+    setTodaySess(sess);
+    const program = user.programs;
+    if (program && program.workout_days) {
+      const day = program.workout_days.find(d => d.day_of_week === dow) || null;
+      setTodayDay(day);
+    }
+    setLoading(false);
+  };
+
+  const startWorkout = async () => {
+    if (!todayDay) return;
+    let sess = todaySess;
+    if (!sess) {
+      sess = await API.createSession(
+        user.id || user.telegram_id,
+        todayDay.id,
+        user.program_id,
+        today
+      );
+    }
+    onStart(todayDay, sess);
+  };
+
+  const program = user.programs;
+  const initials = (user.display_name || user.telegram_name || '?').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
+
+  if (loading) return e('div',{style:{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center'}},e('div',{className:'spin'}));
+
+  const isRest = !todayDay;
+  const sessStatus = todaySess ? todaySess.status : null;
+
+  return e('div',{className:'scroll',style:{padding:'16px'}},
+    e('div',{className:'fade'},
+      // Header
+      e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',paddingTop:8,marginBottom:22}},
+        e('div',null,
+          e('div',{style:{color:'var(--text2)',fontSize:13,fontWeight:600}},fmtDate(today)),
+          e('h1',{style:{fontSize:24,fontWeight:800,letterSpacing:-.5,marginTop:2}},
+            isRest ? 'День отдыха 🛌' : (sessStatus==='completed'?'Тренировка завершена ✅':sessStatus==='in_progress'?'Тренировка идёт 🔥':`${DOW[dow]} · Тренировка`)
+          )
+        ),
+        e('div',{style:{width:42,height:42,borderRadius:13,background:'linear-gradient(135deg,#C6FF3E,#60FF00)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:900,fontSize:16,color:'#060606'}},initials)
+      ),
+
+      // Today card
+      !isRest && todayDay && e('div',{className:'card',style:{marginBottom:14}},
+        e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}},
+          e('div',null,
+            e('div',{style:{color:'var(--text2)',fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:.6,marginBottom:4}},program ? program.name : ''),
+            e('div',{style:{fontWeight:800,fontSize:17,letterSpacing:-.3}},todayDay.name)
+          ),
+          sessStatus==='completed' && e('span',{className:'tag tag-lime'},'✅ Выполнено'),
+          sessStatus==='skipped'   && e('span',{className:'tag tag-red'},'Пропущено'),
+          sessStatus==='in_progress' && e('span',{className:'tag tag-lime'},'В процессе')
+        ),
+        e('div',{style:{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}},
+          e('span',{className:'tag tag-gray'},todayDay.exercises.length+' упр.'),
+          e('span',{className:'tag tag-gray'},todayDay.exercises.reduce((a,x)=>a+x.sets,0)+' подходов')
+        ),
+        sessStatus !== 'completed' && sessStatus !== 'skipped' &&
+          e('button',{className:'btn btn-lime',onClick:startWorkout},
+            sessStatus === 'in_progress' ? '▶ Продолжить тренировку' : '🏋️ Начать тренировку'
+          )
+      ),
+
+      // Rest day card
+      isRest && e('div',{className:'card',style:{marginBottom:14,textAlign:'center',padding:'28px 16px'}},
+        e('div',{style:{fontSize:44,marginBottom:10}},'🛌'),
+        e('div',{style:{fontWeight:700,fontSize:16,marginBottom:4}},'Сегодня отдыхаем'),
+        e('div',{style:{color:'var(--text2)',fontSize:13,lineHeight:1.5}},'Восстановление — часть тренировки')
+      ),
+
+      // Program days
+      program && program.workout_days && e('div',{style:{marginBottom:14}},
+        e('p',{style:{color:'var(--text2)',fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:.6,marginBottom:8}},'Программа'),
+        e('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+          ...program.workout_days.map(day =>
+            e('div',{key:day.id,className:'card',style:{padding:'12px 14px',display:'flex',justifyContent:'space-between',alignItems:'center',borderColor: day.day_of_week===dow?'rgba(198,255,62,.3)':'var(--border)'}},
+              e('div',null,
+                e('div',{style:{fontWeight:700,fontSize:14}},day.name),
+                e('div',{style:{color:'var(--text2)',fontSize:12,marginTop:2}},DOW[day.day_of_week]+' · '+day.exercises.length+' упр.')
+              ),
+              day.day_of_week === dow && e('div',{style:{width:8,height:8,borderRadius:'50%',background:'var(--lime)'}})
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
+// ── WorkoutScreen ──
+function WorkoutScreen({ user, workoutDay, existingSession, onBack, onDone }) {
+  const [session,   setSession]   = useState(existingSession);
+  const [sets,      setSets]      = useState({}); // { exerciseId: Set<number> }
+  const [secs,      setSecs]      = useState(0);
+  const [loading,   setLoading]   = useState(true);
+  const [finishing, setFinishing] = useState(false);
+  const timerRef = useRef(null);
+  const exercises = workoutDay.exercises || [];
+
+  useEffect(() => {
+    (async () => {
+      let sess = session;
+      if (!sess) {
+        sess = await API.createSession(user.id || user.telegram_id, workoutDay.id, user.program_id, toStr());
+        setSession(sess);
+      }
+      const logs = await API.getSessionSets(sess.id);
+      const built = {};
+      logs.forEach(l => {
+        if (!built[l.exercise_id]) built[l.exercise_id] = new Set();
+        built[l.exercise_id].add(l.set_number);
+      });
+      setSets(built);
+      setLoading(false);
+    })();
+    timerRef.current = setInterval(() => setSecs(s => s+1), 1000);
+    return () => clearInterval(timerRef.current);
+  }, []);
+
+  const toggle = async (exId, num) => {
+    if (!session) return;
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    const cur = sets[exId] || new Set();
+    const next = new Set(cur);
+    if (next.has(num)) {
+      next.delete(num);
+      await API.removeSet(session.id, exId, num);
+    } else {
+      next.add(num);
+      await API.logSet(session.id, exId, num);
+    }
+    setSets(s => ({ ...s, [exId]: next }));
+  };
+
+  const totalSets  = exercises.reduce((a, x) => a + x.sets, 0);
+  const doneSets   = Object.values(sets).reduce((a, s) => a + s.size, 0);
+  const progress   = totalSets > 0 ? doneSets / totalSets : 0;
+  const exDone     = ex => (sets[ex.id] && sets[ex.id].size >= ex.sets);
+  const exDoneCount = exercises.filter(exDone).length;
+
+  const finish = async () => {
+    setFinishing(true);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    await API.updateSession(session.id, { status:'completed', finished_at: firebase.firestore.FieldValue.serverTimestamp() });
+    onDone();
+  };
+
+  const abandon = async () => {
+    if (!confirm('Прервать тренировку и отметить как пропущенную?')) return;
+    await API.updateSession(session.id, { status:'skipped', finished_at: firebase.firestore.FieldValue.serverTimestamp() });
+    onBack();
+  };
+
+  if (loading) return e('div',{style:{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center'}},e('div',{className:'spin'}));
+
+  return e('div',{style:{minHeight:'100vh',display:'flex',flexDirection:'column'}},
+    e('div',{style:{padding:'12px 16px 14px',background:'var(--surf)',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:10}},
+      e('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:13}},
+        e('button',{className:'btn btn-icon',onClick:onBack},e(Ic,{n:'back',s:19})),
+        e('div',{style:{flex:1,minWidth:0}},
+          e('div',{style:{fontWeight:800,fontSize:16,letterSpacing:-.3,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},workoutDay.name),
+          e('div',{style:{color:'var(--text2)',fontSize:12,marginTop:2}},exDoneCount+'/'+exercises.length+' упр. · '+fmtSecs(secs))
+        ),
+        e('span',{className:'tag tag-lime'},Math.round(progress*100)+'%')
+      ),
+      e('div',{className:'pbar'},e('div',{className:'pfill',style:{width:Math.round(progress*100)+'%'}})),
+      e('span',{style:{fontSize:11,color:'var(--text2)',display:'block',marginTop:5}},doneSets+' / '+totalSets+' подходов')
+    ),
+    e('div',{style:{flex:1,overflowY:'auto',padding:'14px 16px',paddingBottom:90}},
+      ...exercises.map((ex, i) => {
+        const done = !!exDone(ex);
+        return e('div',{key:ex.id,className:'ex-card'+(done?' ex-done':'')},
+          e('div',{style:{display:'flex',alignItems:'flex-start',gap:10,marginBottom:12}},
+            e('div',{style:{width:26,height:26,borderRadius:7,flexShrink:0,background:done?'var(--lime)':'var(--surf2)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:12,color:done?'#000':'var(--text3)',transition:'all .2s'}},
+              done ? e(Ic,{n:'check',s:13,c:'#000'}) : i+1
+            ),
+            e('div',{style:{flex:1,minWidth:0}},
+              e('div',{style:{fontWeight:700,fontSize:15,lineHeight:1.3}},ex.name),
+              ex.machine && e('div',{style:{color:'var(--text2)',fontSize:12,marginTop:2}},'📍 '+ex.machine),
+              e('div',{style:{display:'flex',gap:5,flexWrap:'wrap',marginTop:7}},
+                e('span',{className:'tag tag-gray'},ex.sets+' подх.'),
+                e('span',{className:'tag tag-gray'},ex.reps+' повт.'),
+                ex.weight && e('span',{className:'tag tag-lime'},ex.weight)
+              )
+            )
+          ),
+          e('div',{style:{display:'flex',gap:7,flexWrap:'wrap'}},
+            ...Array.from({length:ex.sets}).map((_,idx) => {
+              const num = idx+1;
+              const setDone = !!(sets[ex.id] && sets[ex.id].has(num));
+              return e('div',{key:num,className:'set-dot'+(setDone?' done':''),onClick:()=>toggle(ex.id,num)},
+                setDone ? e(Ic,{n:'check',s:13,c:'#000'}) : num
+              );
+            })
+          )
+        );
+      }),
+      e('div',{style:{display:'flex',flexDirection:'column',gap:8,marginTop:8}},
+        e('button',{className:'btn btn-lime',onClick:finish,disabled:finishing},
+          finishing ? e('div',{className:'spin',style:{width:20,height:20,borderWidth:2,borderTopColor:'#000'}}) : '✅ Завершить тренировку'
+        ),
+        e('button',{className:'btn btn-danger',onClick:abandon},'Прервать и пропустить')
+      )
+    )
+  );
+}
+
+// ── CalendarScreen ──
+function CalendarScreen({ user }) {
+  const [cur, setCur]         = useState(new Date());
+  const [sessions, setSessions] = useState([]);
+  const [sel, setSel]         = useState(null);
+  const [loading, setLoading] = useState(true);
+  const planDows = ((user.programs && user.programs.workout_days) || []).map(d => d.day_of_week);
+
+  useEffect(() => { load(); }, [cur.getFullYear(), cur.getMonth()]);
+
+  const load = async () => {
+    setLoading(true); setSel(null);
+    const y = cur.getFullYear(), m = cur.getMonth();
+    const data = await API.getMonthSessions(user.id || user.telegram_id, toStr(new Date(y,m,1)), toStr(new Date(y,m+1,0)));
+    setSessions(data); setLoading(false);
+  };
+
+  const y = cur.getFullYear(), m = cur.getMonth();
+  const firstDow = (() => { let d = new Date(y,m,1).getDay()-1; return d<0?6:d; })();
+  const daysInMonth = new Date(y,m+1,0).getDate();
+  const cells = [...Array(firstDow).fill(null), ...Array.from({length:daysInMonth},(_,i)=>i+1)];
+  const todayStr = toStr();
+  const sessMap = Object.fromEntries(sessions.map(s => [s.date, s]));
+  const selSess = sel ? sessMap[sel] : null;
+
+  return e('div',{className:'scroll',style:{padding:'16px'}},
+    e('div',{className:'fade'},
+      e('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',paddingTop:8,marginBottom:20}},
+        e('button',{className:'btn btn-icon',onClick:()=>setCur(new Date(y,m-1))},e(Ic,{n:'chevL',s:18})),
+        e('h2',{style:{fontWeight:800,fontSize:20}},MONS[m]+' '+y),
+        e('button',{className:'btn btn-icon',onClick:()=>setCur(new Date(y,m+1))},e(Ic,{n:'chevR',s:18}))
+      ),
+      e('div',{className:'cal-grid',style:{marginBottom:6}},
+        ...DOW.slice(1).map(d => e('div',{key:d,style:{textAlign:'center',fontSize:11,color:'var(--text3)',fontWeight:700,padding:'3px 0'}},d))
+      ),
+      loading ? e('div',{style:{display:'flex',justifyContent:'center',padding:40}},e('div',{className:'spin'})) :
+      e('div',{className:'cal-grid'},
+        ...cells.map((day,i) => {
+          if (!day) return e('div',{key:'e'+i});
+          const ds = toStr(new Date(y,m,day));
+          const sess = sessMap[ds];
+          const isToday = ds === todayStr, isSel = sel === ds;
+          const isDone = sess && sess.status==='completed', isSkip = sess && sess.status==='skipped';
+          const hasDot = isDone || isSkip || (!sess && planDows.includes(getDow(new Date(y,m,day))) && ds > todayStr);
+          const cls = ['cal-cell',isToday&&!isSel?'is-today':'',isDone&&!isSel?'is-done':'',isSkip&&!isSel?'is-skip':'',isSel?'is-sel':''].join(' ');
+          return e('div',{key:day,className:cls,onClick:()=>setSel(isSel?null:ds)},
+            e('span',{style:{fontSize:13}},day),
+            hasDot && !isSel && e('div',{style:{width:4,height:4,borderRadius:'50%',marginTop:2,background:isDone?'var(--lime)':isSkip?'var(--red)':'var(--text3)'}})
+          );
+        })
+      ),
+      e('div',{style:{display:'flex',gap:16,justifyContent:'center',marginTop:14,flexWrap:'wrap'}},
+        ...[ ['var(--lime)','Выполнено'], ['var(--red)','Пропущено'], ['var(--text3)','Запланировано'] ].map(([c,l]) =>
+          e('div',{key:l,style:{display:'flex',alignItems:'center',gap:5,fontSize:11,color:'var(--text2)'}},
+            e('div',{style:{width:7,height:7,borderRadius:'50%',background:c}}), l
+          )
+        )
+      ),
+      sel && e('div',{style:{marginTop:16}},
+        e('div',{className:'card'},
+          e('p',{style:{fontWeight:800,fontSize:15,marginBottom:8}},fmtDate(sel)),
+          selSess ? e(Fragment,null,
+            e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
+              e('span',{style:{color:'var(--text2)',fontSize:13}},selSess.workout_day_id ? 'Тренировка' : ''),
+              e('span',{className: selSess.status==='completed'?'tag tag-lime':selSess.status==='skipped'?'tag tag-red':'tag tag-gray'},
+                selSess.status==='completed'?'Выполнено':selSess.status==='skipped'?'Пропущено':'В процессе')
+            ),
+            selSess.set_logs && selSess.set_logs.length > 0 &&
+              e('div',{style:{color:'var(--text2)',fontSize:13}}, selSess.set_logs.length + ' подходов выполнено')
+          ) : e('p',{style:{color:'var(--text2)',fontSize:13}},
+              planDows.includes(getDow(new Date(sel+'T12:00:00'))) ? 'Тренировка запланирована' : 'День отдыха'
+            )
+        )
+      )
+    )
+  );
+}
+
+// ── ProfileScreen ──
+function ProfileScreen({ user, onUpdate }) {
+  const [modal, setModal] = useState(null);
+  const [name,  setName]  = useState(user.display_name || '');
+  const [goal,  setGoal]  = useState(user.goal || '');
+  const [stats, setStats] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { API.getStats(user.id || user.telegram_id).then(setStats); }, []);
+
+  const save = async () => {
+    setSaving(true);
+    const upd = modal==='name' ? {display_name:name} : {goal};
+    const updated = await API.updateUser(user.id || user.telegram_id, upd);
+    if (updated) onUpdate(updated);
+    setSaving(false); setModal(null);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+  };
+
+  const initials = (user.display_name || user.telegram_name || '?').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
+  const since = user.created_at
+    ? (user.created_at.toDate ? user.created_at.toDate() : new Date(user.created_at)).toLocaleDateString('ru-RU',{month:'long',year:'numeric'})
+    : '—';
+
+  return e('div',{className:'scroll',style:{padding:'16px'}},
+    e('div',{className:'fade'},
+      e('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',padding:'20px 0 22px'}},
+        e('div',{style:{width:80,height:80,borderRadius:26,background:'linear-gradient(135deg,#C6FF3E,#60FF00)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:28,fontWeight:900,color:'#060606',boxShadow:'0 0 40px rgba(198,255,62,.2)',marginBottom:14}},initials),
+        e('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:4}},
+          e('h2',{style:{fontSize:22,fontWeight:800}},user.display_name||user.telegram_name),
+          e('button',{onClick:()=>setModal('name'),style:{background:'none',border:'none',cursor:'pointer',color:'var(--text2)',padding:2}},e(Ic,{n:'edit',s:15}))
+        ),
+        user.telegram_username && e('div',{style:{color:'var(--text2)',fontSize:14}},'@'+user.telegram_username),
+        e('div',{style:{color:'var(--text3)',fontSize:12,marginTop:5}},'С нами с '+since)
+      ),
+      stats && e('div',{className:'stat-grid',style:{marginBottom:14}},
+        ...[
+          {icon:'🏋️', val:stats.totalWorkouts, lbl:'Тренировок'},
+          {icon:'🔥',  val:stats.streak+' дн.', lbl:'Серия'},
+          {icon:'💪',  val:stats.totalSets,     lbl:'Подходов'},
+          {icon:'📋',  val:(user.programs&&user.programs.name)||'—', lbl:'Программа', small:true},
+        ].map((s,i) => e('div',{key:i,className:'stat-card'},
+          e('div',{style:{fontSize:20,marginBottom:6}},s.icon),
+          e('div',{style:{fontWeight:800,fontSize:s.small?14:22,letterSpacing:-.3,lineHeight:1}},s.val),
+          e('div',{style:{color:'var(--text2)',fontSize:11,marginTop:5,fontWeight:600}},s.lbl)
+        ))
+      ),
+      e('div',{className:'card',style:{marginBottom:12}},
+        e('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}},
+          e('div',{style:{display:'flex',alignItems:'center',gap:7}},e(Ic,{n:'target',s:17,c:'var(--lime)'}),e('span',{style:{fontWeight:700,fontSize:14}},'Моя цель')),
+          e('button',{onClick:()=>setModal('goal'),style:{background:'none',border:'none',cursor:'pointer',color:'var(--text2)'}},e(Ic,{n:'edit',s:15}))
+        ),
+        e('div',{style:{fontSize:14,color:user.goal?'var(--text)':'var(--text3)',lineHeight:1.5}},user.goal||'Нажми на карандаш, чтобы установить цель')
+      ),
+      e('div',{className:'card'},
+        e('p',{style:{color:'var(--text2)',fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:.6,marginBottom:12}},'Аккаунт'),
+        ...[
+          { lbl:'Telegram ID',    val: user.telegram_id },
+          { lbl:'Последний вход', val: user.last_seen ? (user.last_seen.toDate ? user.last_seen.toDate() : new Date(user.last_seen)).toLocaleDateString('ru-RU') : '—' },
+          { lbl:'Программа',      val: (user.programs && user.programs.name) || 'Не назначена' },
+        ].map((row,i,arr) => e('div',{key:i},
+          e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',fontSize:14}},
+            e('span',{style:{color:'var(--text2)'}},row.lbl),
+            e('span',{style:{fontWeight:700}},String(row.val))
+          ),
+          i < arr.length-1 && e('div',{className:'divider',style:{margin:0}})
+        ))
+      )
+    ),
+    modal && e('div',{className:'overlay',onClick:()=>setModal(null)},
+      e('div',{className:'sheet fade',onClick:ev=>ev.stopPropagation()},
+        e('div',{className:'sheet-handle'}),
+        e('h3',{style:{fontWeight:800,fontSize:18,marginBottom:16}},modal==='name'?'Изменить имя':'Изменить цель'),
+        e('input',{
+          className:'input',
+          value:modal==='name'?name:goal,
+          onChange:ev=>modal==='name'?setName(ev.target.value):setGoal(ev.target.value),
+          placeholder:modal==='name'?'Твоё имя':'Например: похудеть к лету на 5 кг',
+          style:{marginBottom:12},
+          autoFocus:true
+        }),
+        e('button',{className:'btn btn-lime',onClick:save,disabled:saving},saving?'Сохраняю...':'Сохранить')
+      )
+    )
+  );
+}
+
+// ── BottomNav ──
+function BottomNav({ tab, set, hasActive }) {
+  const tabs = [
+    { id:'home',     lbl:'Главная',    icon:'home' },
+    { id:'workout',  lbl:'Тренировка', icon:'dumbbell' },
+    { id:'calendar', lbl:'Календарь',  icon:'calendar' },
+    { id:'profile',  lbl:'Профиль',    icon:'person' },
+  ];
+  return e('div',{className:'nav'},
+    ...tabs.map(t => e('button',{key:t.id,className:'nav-btn'+(tab===t.id?' active':''),onClick:()=>set(t.id)},
+      e('div',{style:{position:'relative'}},
+        e(Ic,{n:t.icon,s:23}),
+        t.id==='workout' && hasActive && e('div',{style:{position:'absolute',top:-2,right:-3,width:8,height:8,borderRadius:'50%',background:'var(--lime)',border:'2px solid var(--bg)'}})
+      ),
+      e('span',null, t.id==='workout' && hasActive ? 'В процессе' : t.lbl)
+    ))
+  );
+}
+
+// ── CompletionScreen ──
+function CompletionScreen({ onClose }) {
+  return e('div',{style:{minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:24,textAlign:'center'}},
+    e('div',{className:'fade'},
+      e('div',{style:{fontSize:80,marginBottom:20}},'🎉'),
+      e('h1',{style:{fontSize:28,fontWeight:800,marginBottom:8}},'Отличная работа!'),
+      e('p',{style:{color:'var(--text2)',fontSize:16,marginBottom:36,maxWidth:260}},'Тренировка завершена. Так держать!'),
+      e('button',{className:'btn btn-lime',style:{maxWidth:240},onClick:onClose},'На главную')
+    )
+  );
+}
+
+// ── App ──
+function App() {
+  const [state,    setState]   = useState({ loading:true, user:null });
+  const [tab,      setTab]     = useState('home');
+  const [workout,  setWorkout] = useState(null);
+  const [done,     setDone]    = useState(false);
+
+  useEffect(() => { init(); }, []);
+
+  const init = async () => {
+    try {
+      const splash = document.getElementById('splash');
+      if (!TG_USER) {
+        if (splash) splash.parentNode.removeChild(splash);
+        setState({ loading:false, user:null }); return;
+      }
+      const user = await API.getUser(TG_USER.id);
+      if (splash) splash.parentNode.removeChild(splash);
+      if (user) { API.touch(TG_USER.id); setState({ loading:false, user }); }
+      else setState({ loading:false, user:null });
+    } catch(err) {
+      console.error(err);
+      const splash = document.getElementById('splash');
+      if (splash) splash.parentNode.removeChild(splash);
+      setState({ loading:false, user:null });
+    }
+  };
+
+  const handleAuth   = u => setState({ loading:false, user:u });
+  const handleUpdate = u => setState(s => ({ ...s, user:{ ...s.user, ...u }}));
+  const handleStart  = (day, sess) => { setWorkout({ day, session:sess }); setTab('workout'); };
+  const handleBack   = () => { setWorkout(null); setTab('home'); };
+  const handleDone   = () => { setWorkout(null); setDone(true); setTab('home'); };
+  const changeTab    = t => { if (t !== 'workout') setWorkout(null); setTab(t); };
+
+  const { loading, user } = state;
+
+  if (loading) return e('div',{style:{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center'}},
+    e('div',{style:{textAlign:'center'}},
+      e('div',{style:{width:56,height:56,borderRadius:16,background:'linear-gradient(135deg,#C6FF3E,#7AFF00)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:28,margin:'0 auto 20px'}},'💪'),
+      e('div',{className:'spin',style:{margin:'0 auto'}})
+    )
+  );
+
+  if (!user)  return e(AuthScreen,{onAuth:handleAuth});
+  if (done)   return e(CompletionScreen,{onClose:()=>setDone(false)});
+  if (tab==='workout' && workout) return e(WorkoutScreen,{user,workoutDay:workout.day,existingSession:workout.session,onBack:handleBack,onDone:handleDone});
+
+  return e('div',{style:{minHeight:'100vh',display:'flex',flexDirection:'column'}},
+    tab==='home'     && e(HomeScreen,    {user, onStart:handleStart}),
+    tab==='workout'  && e(HomeScreen,    {user, onStart:handleStart}),
+    tab==='calendar' && e(CalendarScreen,{user}),
+    tab==='profile'  && e(ProfileScreen, {user, onUpdate:handleUpdate}),
+    e(BottomNav,{tab, set:changeTab, hasActive:!!workout})
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(e(App,null));
+
+})();
+</script>
+</body>
+</html>
